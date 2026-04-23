@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PDF Question Extractor Pro</title>
+    
+    <link rel="manifest" href="manifest.json">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; background: #2c2c2c; }
+        
+        /* Main Toolbar */
+        .toolbar { background: white; padding: 10px; width: 100%; box-sizing: border-box; box-shadow: 0 2px 5px rgba(0,0,0,0.3); z-index: 100; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-items: center; }
+        
+        button, select, input[type="number"] { padding: 8px 12px; border: 1px solid #ccc; background: #007bff; color: white; border-radius: 5px; font-size: 14px; cursor: pointer; }
+        button:active { background: #0056b3; }
+        
+        .page-nav { display: flex; align-items: center; gap: 5px; }
+        .page-nav input[type="number"] { background: white; color: black; width: 45px; text-align: center; }
+        .page-nav button.go-btn { background: #28a745; font-weight: bold; padding: 8px 10px; }
+        
+        .control-group { display: flex; align-items: center; gap: 5px; background: #e9ecef; padding: 5px; border-radius: 5px; color: black; }
+        .control-group button { background: #6c757d; font-weight: bold; }
+
+        .lock-wrapper { display: flex; flex-direction: column; align-items: center; background: #ffeeba; border: 1px solid #ffdf7e; border-radius: 5px; padding: 4px 8px; color: #856404; }
+        .lock-group { font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 5px; margin: 0; }
+        .lock-group input { cursor: pointer; width: 16px; height: 16px; margin: 0; }
+        #update-width-btn { cursor: pointer; font-size: 16px; user-select: none; transition: transform 0.1s; }
+        #update-width-btn:active { transform: scale(0.8); }
+        .width-display { font-size: 12px; font-weight: normal; margin-top: 2px; }
+        
+        #add-box-btn { background: #28a745; font-weight: bold; }
+        #add-box-btn.active { background: #ffc107; color: black; }
+        #delete-btn { background: #dc3545; font-weight: bold; }
+        #settings-btn { background: #6c757d; font-weight: bold; }
+
+        /* Collapsible Settings Panel */
+        #settings-panel { display: none; background: #e9ecef; padding: 15px; width: 100%; box-sizing: border-box; border-bottom: 2px solid #ccc; flex-wrap: wrap; gap: 15px; justify-content: center; z-index: 99; box-shadow: inset 0 -3px 5px rgba(0,0,0,0.1); }
+        #settings-panel.open { display: flex; }
+        .settings-section { display: flex; flex-direction: column; align-items: center; gap: 8px; background: white; padding: 10px 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .settings-section strong { font-size: 14px; color: #333; }
+        .settings-section input[type="text"] { width: 250px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; color: black; background: #fff; }
+        select { background: white; color: black; }
+
+        #canvas-wrapper { flex-grow: 1; overflow: hidden; width: 100%; position: relative; background: #2c2c2c; }
+        canvas { touch-action: none; }
+
+        #loader { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); color: white; display: none; justify-content: center; align-items: center; z-index: 1000; font-size: 20px; font-weight: bold; flex-direction: column; }
+        .spinner { margin-top: 15px; border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div class="toolbar">
+        <input type="file" id="pdf-upload" accept="application/pdf" style="display:none;">
+        <button onclick="document.getElementById('pdf-upload').click()">📂 Load PDF</button>
+        
+        <div class="control-group page-nav">
+            <button onclick="prevPage()">&lt;</button>
+            <input type="number" id="page-num" value="1" min="1">
+            <button class="go-btn" onclick="goToPage()">Go</button>
+            <span>/ <span id="page-count">0</span></span>
+            <button onclick="nextPage()">&gt;</button>
+        </div>
+
+        <button id="add-box-btn" onclick="toggleAddBoxMode()">+ Add Box</button>
+        <button id="delete-btn" onclick="deleteSelectedBox()">🗑️ Delete</button>
+        <button onclick="toggleSubPart()">Toggle Sub-part</button>
+        
+        <div class="lock-wrapper">
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <label class="lock-group">
+                    <input type="checkbox" id="lock-width-cb"> Lock Width
+                </label>
+                <span id="update-width-btn" title="Set this box's width for future boxes">🔄</span>
+            </div>
+            <div class="width-display">Width: <span id="box-width-val">350</span>px</div>
+        </div>
+
+        <button id="settings-btn" onclick="toggleSettings()">⚙️ Settings</button>
+        <button onclick="generatePDF()" style="background: #28a745; font-weight: bold;">Generate PDF</button>
+    </div>
+
+    <div id="settings-panel">
+        <div class="settings-section">
+            <strong>Magnification</strong>
+            <div class="control-group" style="background: transparent; padding: 0;">
+                <button onclick="zoomOut()">- Zoom</button>
+                <button onclick="zoomIn()">+ Zoom</button>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <strong>PDF Document Settings</strong>
+            <select id="numbering-mode" onchange="renumberAllBoxes()">
+                <option value="drawn" selected>Number by Order Drawn</option>
+                <option value="spatial">Number by Page Location (Top to Bottom)</option>
+            </select>
+            <select id="layout-select">
+                <option value="1">1 Column Output</option>
+                <option value="2">2 Columns Output</option>
+            </select>
+        </div>
+
+        <div class="settings-section">
+            <strong>Front Page Title Header</strong>
+            <input type="text" id="title-h1" placeholder="Main Title (e.g., Final Exam)">
+            <input type="text" id="title-h2" placeholder="Subtitle (e.g., Chapter 4)">
+            <input type="text" id="title-h3" placeholder="Details (e.g., Time: 2 Hrs)">
+        </div>
+    </div>
+
+    <div id="canvas-wrapper">
+        <canvas id="pdf-canvas" style="display:none;"></canvas>
+        <canvas id="ui-canvas"></canvas>
+    </div>
+
+    <div id="loader">
+        Generating Crisp A4 PDF... Please Wait.
+        <div class="spinner"></div>
+    </div>
+
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+    let pdfDoc = null;
+    let fabricCanvas = null;
+    let pageNum = 1;
+    
+    const BASE_SCALE = 2.0; 
+    let currentZoom = 1.0; 
+
+    let isAddingBoxMode = false;
+    let lastBoxWidth = 350; 
+    const STANDARD_NEW_HEIGHT = 80; 
+    
+    let pageBoxes = {}; 
+    let isDragging = false;
+    let lastPosX = 0; let lastPosY = 0;
+    
+    let globalCreationCounter = 0; 
+
+    // Keyboard Deletion
+    window.addEventListener('keydown', function(e) {
+        const tag = e.target.tagName.toLowerCase();
+        if (tag === 'input' || tag === 'textarea') return; 
+        if (fabricCanvas && fabricCanvas.getActiveObject() && fabricCanvas.getActiveObject().isEditing) return;
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            deleteSelectedBox();
+        }
+    });
+
+    document.getElementById('pdf-upload').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file.type !== 'application/pdf') return;
+        const fileReader = new FileReader();
+        fileReader.onload = function() {
+            const typedarray = new Uint8Array(this.result);
+            pdfjsLib.getDocument(typedarray).promise.then(pdf => {
+                pdfDoc = pdf;
+                document.getElementById('page-count').innerText = pdf.numPages;
+                pageNum = 1;
+                renderPage(pageNum, true);
+            });
+        };
+        fileReader.readAsArrayBuffer(file);
+    });
+
+    function toggleSettings() { document.getElementById('settings-panel').classList.toggle('open'); }
+    function prevPage() { if (pageNum <= 1) return; pageNum--; renderPage(pageNum); }
+    function nextPage() { if (pageNum >= pdfDoc.numPages) return; pageNum++; renderPage(pageNum); }
+    function goToPage() {
+        let num = parseInt(document.getElementById('page-num').value);
+        if (num >= 1 && num <= pdfDoc.numPages) { pageNum = num; renderPage(pageNum); }
+        else { document.getElementById('page-num').value = pageNum; } 
+    }
+
+    function zoomIn() { currentZoom += 0.15; fabricCanvas.setZoom(currentZoom); }
+    function zoomOut() { if (currentZoom > 0.2) { currentZoom -= 0.15; fabricCanvas.setZoom(currentZoom); } }
+    function updateWidthDisplay(width) { document.getElementById('box-width-val').innerText = Math.round(width); }
+
+    document.getElementById('update-width-btn').addEventListener('click', function() {
+        if (!fabricCanvas) return;
+        const activeObj = fabricCanvas.getActiveObject();
+        if (activeObj && activeObj.type === 'rect') {
+            lastBoxWidth = activeObj.width * activeObj.scaleX;
+            updateWidthDisplay(lastBoxWidth);
+            const display = document.getElementById('box-width-val');
+            display.style.color = '#28a745'; display.style.fontWeight = 'bold';
+            setTimeout(() => { display.style.color = ''; display.style.fontWeight = 'normal'; }, 500);
+        } else { alert("Select a box first to grab its width."); }
+    });
+
+    document.getElementById('lock-width-cb').addEventListener('change', function(e) {
+        if (!fabricCanvas) return;
+        const isLocked = e.target.checked;
+        const activeObj = fabricCanvas.getActiveObject();
+        if (activeObj && activeObj.type === 'rect') {
+            activeObj.set('lockScalingX', isLocked);
+            if (isLocked) {
+                lastBoxWidth = activeObj.width * activeObj.scaleX;
+                updateWidthDisplay(lastBoxWidth);
+            }
+            fabricCanvas.requestRenderAll();
+        }
+    });
+
+    function renderPage(num, isFirstLoad = false) {
+        if (!pdfDoc) return;
+        document.getElementById('page-num').value = num;
+        
+        pdfDoc.getPage(num).then(page => {
+            const viewport = page.getViewport({ scale: BASE_SCALE });
+            const pdfCanvas = document.getElementById('pdf-canvas');
+            const ctx = pdfCanvas.getContext('2d');
+            pdfCanvas.height = viewport.height; pdfCanvas.width = viewport.width;
+
+            page.render({ canvasContext: ctx, viewport: viewport }).promise.then(() => {
+                if (fabricCanvas) { fabricCanvas.dispose(); }
+
+                fabricCanvas = new fabric.Canvas('ui-canvas', {
+                    width: window.innerWidth, height: window.innerHeight - 80, 
+                    selection: false, uniformScaling: false
+                });
+
+                if (isFirstLoad) { currentZoom = window.innerWidth / viewport.width; }
+                fabricCanvas.setZoom(currentZoom);
+
+                fabric.Image.fromURL(pdfCanvas.toDataURL('image/jpeg', 1.0), function(img) {
+                    fabricCanvas.setBackgroundImage(img, fabricCanvas.renderAll.bind(fabricCanvas), { originX: 'left', originY: 'top' });
+                });
+
+                if (pageBoxes[num]) {
+                    pageBoxes[num].forEach(box => {
+                        fabricCanvas.add(box); 
+                        fabricCanvas.add(box.qData.labelObj);
+                        fabricCanvas.add(box.qData.sourceObj); 
+                    });
+                } else { pageBoxes[num] = []; }
+
+                setupCanvasInteractions();
+            });
+        });
+    }
+
+    function setupCanvasInteractions() {
+        
+        fabricCanvas.on('object:scaling', function(e) {
+            if (e.target && e.target.type === 'rect') {
+                e.target.set({ stroke: '#ff4d4d', fill: 'rgba(255, 77, 77, 0.15)' });
+                updateWidthDisplay(e.target.width * e.target.scaleX);
+            }
+        });
+
+        fabricCanvas.on('object:modified', function(e) {
+            if (e.target && e.target.type === 'rect') {
+                e.target.set({ stroke: '#007bff', fill: 'rgba(0, 123, 255, 0.1)' });
+                lastBoxWidth = e.target.width * e.target.scaleX;
+                updateWidthDisplay(lastBoxWidth);
+                renumberAllBoxes(); 
+            }
+        });
+
+        function syncLockUI(opt) {
+            if (opt.selected && opt.selected[0] && opt.selected[0].type === 'rect') {
+                const box = opt.selected[0];
+                document.getElementById('lock-width-cb').checked = box.lockScalingX;
+                updateWidthDisplay(box.width * box.scaleX);
+            }
+        }
+        fabricCanvas.on('selection:created', syncLockUI);
+        fabricCanvas.on('selection:updated', syncLockUI);
+        fabricCanvas.on('selection:cleared', function() { updateWidthDisplay(lastBoxWidth); });
+
+        fabricCanvas.on('mouse:down', function(opt) {
+            let evt = opt.e;
+            
+            if (opt.target && opt.target.type === 'textbox') return;
+
+            if (isAddingBoxMode) {
+                const pointer = fabricCanvas.getPointer(evt); 
+                createNewBox(pointer.x, pointer.y);
+                isAddingBoxMode = false;
+                document.getElementById('add-box-btn').classList.remove('active');
+                document.getElementById('add-box-btn').innerText = "+ Add Box";
+                return;
+            }
+            if (!opt.target) {
+                isDragging = true;
+                fabricCanvas.defaultCursor = 'grabbing';
+                lastPosX = evt.clientX || (evt.touches && evt.touches[0].clientX);
+                lastPosY = evt.clientY || (evt.touches && evt.touches[0].clientY);
+            }
+        });
+
+        fabricCanvas.on('mouse:move', function(opt) {
+            if (isDragging) {
+                let evt = opt.e;
+                let vpt = fabricCanvas.viewportTransform;
+                let currentX = evt.clientX || (evt.touches && evt.touches[0].clientX);
+                let currentY = evt.clientY || (evt.touches && evt.touches[0].clientY);
+                if (currentX === undefined || currentY === undefined) return;
+                vpt[4] += currentX - lastPosX; vpt[5] += currentY - lastPosY;
+                fabricCanvas.requestRenderAll();
+                lastPosX = currentX; lastPosY = currentY;
+            }
+        });
+
+        fabricCanvas.on('mouse:up', function() {
+            fabricCanvas.setViewportTransform(fabricCanvas.viewportTransform);
+            isDragging = false; fabricCanvas.defaultCursor = 'default';
+        });
+    }
+
+    function renumberAllBoxes() {
+        let allBoxes = [];
+        Object.keys(pageBoxes).forEach(pNum => { allBoxes = allBoxes.concat(pageBoxes[pNum]); });
+        
+        if(allBoxes.length === 0) return;
+
+        const mode = document.getElementById('numbering-mode').value;
+        const colsCount = parseInt(document.getElementById('layout-select').value);
+        
+        allBoxes.sort((a, b) => {
+            if (mode === 'drawn') {
+                return a.qData.creationId - b.qData.creationId;
+            } else {
+                if (a.qData.pageNum === b.qData.pageNum) {
+                    if (colsCount === 2 && Math.abs(a.left - b.left) > 200) return a.left - b.left;
+                    return a.top - b.top; 
+                }
+                return a.qData.pageNum - b.qData.pageNum;
+            }
+        });
+
+        let mainCount = 0; let subCount = 0;
+
+        allBoxes.forEach(box => {
+            if (box.qData.isSub) {
+                subCount++;
+                let currentMain = Math.max(1, mainCount); 
+                box.qData.number = currentMain + String.fromCharCode(96 + subCount);
+            } else {
+                mainCount++; subCount = 0;
+                box.qData.number = mainCount.toString();
+            }
+            box.qData.labelObj.set({ text: "Q" + box.qData.number });
+        });
+
+        if (fabricCanvas) fabricCanvas.requestRenderAll();
+    }
+
+    function deleteSelectedBox() {
+        let activeObj = fabricCanvas.getActiveObject();
+        if (!activeObj) return alert("Select a box to delete.");
+
+        if (activeObj.type === 'textbox') {
+            const parentBox = pageBoxes[pageNum].find(b => b.qData.sourceObj === activeObj || b.qData.labelObj === activeObj);
+            if (parentBox) activeObj = parentBox;
+            else return;
+        }
+
+        if (activeObj.type !== 'rect') return alert("Select a box to delete.");
+
+        fabricCanvas.remove(activeObj);
+        fabricCanvas.remove(activeObj.qData.labelObj);
+        fabricCanvas.remove(activeObj.qData.sourceObj);
+
+        const pNum = activeObj.qData.pageNum;
+        pageBoxes[pNum] = pageBoxes[pNum].filter(b => b !== activeObj);
+
+        renumberAllBoxes(); 
+    }
+
+    function toggleSubPart() {
+        const activeObj = fabricCanvas.getActiveObject();
+        if (!activeObj || activeObj.type !== 'rect') return alert("Tap a box to select it first.");
+        activeObj.qData.isSub = !activeObj.qData.isSub; 
+        renumberAllBoxes(); 
+    }
+
+    function toggleAddBoxMode() {
+        if (!pdfDoc) return alert("Load a PDF first.");
+        isAddingBoxMode = !isAddingBoxMode;
+        const btn = document.getElementById('add-box-btn');
+        if (isAddingBoxMode) {
+            btn.classList.add('active'); btn.innerText = "Tap on Page...";
+        } else {
+            btn.classList.remove('active'); btn.innerText = "+ Add Box";
+        }
+    }
+
+    function createNewBox(x, y) {
+        const isWidthLocked = document.getElementById('lock-width-cb').checked;
+        globalCreationCounter++; 
+        
+        const rect = new fabric.Rect({
+            left: x - (lastBoxWidth / 2), top: y - (STANDARD_NEW_HEIGHT / 2),
+            width: lastBoxWidth, height: STANDARD_NEW_HEIGHT,
+            fill: 'rgba(0, 123, 255, 0.1)', stroke: '#007bff', strokeWidth: 3, 
+            strokeUniform: true, objectCaching: false, 
+            originX: 'left', originY: 'top',
+            hasBorders: true, cornerSize: 32, cornerStyle: 'circle', cornerColor: 'rgba(135, 206, 235, 0.85)',
+            transparentCorners: false, lockRotation: true, lockScalingFlip: true, lockUniScaling: false,
+            lockScalingX: isWidthLocked
+        });
+
+        rect.setControlsVisibility({ mt: false, mb: false, ml: false, mr: false, tl: false, tr: false, bl: false, mtr: false, br: true });
+
+        const textLabel = new fabric.Text("", {
+            left: rect.left, top: rect.top - 28, fontSize: 22, fill: 'black', backgroundColor: 'white',
+            selectable: false, evented: false 
+        });
+
+        const sourceLabel = new fabric.Textbox("(Tap to add info)", {
+            left: rect.left + 50, top: rect.top - 28, 
+            width: 220, fontSize: 16, 
+            fill: '#6c757d', backgroundColor: '#f8f9fa',
+            fontStyle: 'italic', selectable: true, hasControls: false, hasBorders: true, 
+            borderColor: '#28a745', editingBorderColor: '#28a745', padding: 5
+        });
+
+        sourceLabel.on('selected', function() { this.enterEditing(); });
+
+        sourceLabel.on('editing:entered', function() {
+            if (this.text === "(Tap to add info)") {
+                this.text = ""; 
+                if(this.hiddenTextarea) this.hiddenTextarea.value = ""; 
+                this.set({ fill: 'black', fontStyle: 'normal' }); 
+                fabricCanvas.requestRenderAll();
+            }
+        });
+
+        sourceLabel.on('editing:exited', function() {
+            if (this.text.trim() === "") {
+                this.text = "(Tap to add info)"; 
+                this.set({ fill: '#6c757d', fontStyle: 'italic' }); 
+                fabricCanvas.requestRenderAll();
+            }
+        });
+
+        const syncLabel = () => { 
+            textLabel.set({ left: rect.left, top: rect.top - 28 }); 
+            sourceLabel.set({ left: rect.left + 45, top: rect.top - 28 }); 
+            fabricCanvas.requestRenderAll(); 
+        };
+        rect.on('moving', syncLabel); rect.on('scaling', syncLabel);
+
+        rect.set('qData', { isSub: false, number: "0", pageNum: pageNum, labelObj: textLabel, sourceObj: sourceLabel, creationId: globalCreationCounter });
+        
+        fabricCanvas.add(rect, textLabel, sourceLabel);
+        fabricCanvas.setActiveObject(rect);
+        pageBoxes[pageNum].push(rect);
+        
+        renumberAllBoxes(); 
+    }
+
+    async function generatePDF() {
+        let allBoxes = [];
+        Object.keys(pageBoxes).forEach(pNum => { allBoxes = allBoxes.concat(pageBoxes[pNum]); });
+        if (allBoxes.length === 0) return alert("Add at least one question box.");
+        
+        document.getElementById('loader').style.display = 'flex';
+        isDragging = false; 
+
+        setTimeout(async () => {
+            try {
+                const colsCount = parseInt(document.getElementById('layout-select').value);
+                
+                const sortedBoxes = allBoxes.sort((a, b) => {
+                    return a.qData.number.localeCompare(b.qData.number, undefined, { numeric: true, sensitivity: 'base' });
+                });
+
+                const boxesByPage = {};
+                sortedBoxes.forEach(b => {
+                    if(!boxesByPage[b.qData.pageNum]) boxesByPage[b.qData.pageNum] = [];
+                    boxesByPage[b.qData.pageNum].push(b);
+                });
+
+                const GEN_SCALE = 4.0; const ratio = GEN_SCALE / BASE_SCALE; 
+
+                const offCanvas = document.createElement('canvas'); const offCtx = offCanvas.getContext('2d');
+                const cropCanvas = document.createElement('canvas'); const cropCtx = cropCanvas.getContext('2d');
+
+                for (let pNum in boxesByPage) {
+                    const page = await pdfDoc.getPage(parseInt(pNum));
+                    const viewport = page.getViewport({ scale: GEN_SCALE });
+                    
+                    offCanvas.width = viewport.width; offCanvas.height = viewport.height;
+                    await page.render({ canvasContext: offCtx, viewport: viewport }).promise;
+
+                    for (let box of boxesByPage[pNum]) {
+                        const cropX = box.left * ratio; const cropY = box.top * ratio;
+                        const cropW = (box.width * box.scaleX) * ratio; const cropH = (box.height * box.scaleY) * ratio;
+
+                        cropCanvas.width = cropW; cropCanvas.height = cropH;
+
+                        cropCtx.filter = 'contrast(1.3) grayscale(0.2)';
+                        cropCtx.drawImage(offCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+                        box.croppedImage = cropCanvas.toDataURL('image/jpeg', 1.0);
+                        box.displayW = cropW * (210 / viewport.width); box.displayH = cropH * (210 / viewport.width);
+                    }
+                }
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+                
+                const pageWidth = 210; const pageH = 297; const margin = 8; 
+                let currentY = margin;
+                
+                const t1 = document.getElementById('title-h1').value.trim();
+                const t2 = document.getElementById('title-h2').value.trim();
+                const t3 = document.getElementById('title-h3').value.trim();
+                const centerX = pageWidth / 2;
+
+                if (t1 || t2 || t3) {
+                    if (t1) { pdf.setFontSize(22); pdf.setFont('helvetica', 'bold'); currentY += 10; pdf.text(t1, centerX, currentY, { align: 'center' }); }
+                    if (t2) { pdf.setFontSize(16); pdf.setFont('helvetica', 'normal'); currentY += t1 ? 8 : 10; pdf.text(t2, centerX, currentY, { align: 'center' }); }
+                    if (t3) { pdf.setFontSize(12); pdf.setFont('helvetica', 'italic'); currentY += (t1 || t2) ? 6 : 10; pdf.text(t3, centerX, currentY, { align: 'center' }); }
+                    
+                    currentY += 8;
+                    pdf.setLineWidth(0.5); pdf.setLineDashPattern([3, 3], 0);
+                    pdf.line(margin, currentY, pageWidth - margin, currentY);
+                    pdf.setLineDashPattern([], 0); 
+                    currentY += 10; 
+                }
+
+                const usableWidth = pageWidth - (margin * 2);
+                const columnGap = 10;
+                let colWidth = usableWidth;
+                if (colsCount === 2) { colWidth = (usableWidth - columnGap) / 2; }
+                
+                const numberColWidth = 10; 
+                const maxImageWidth = colWidth - numberColWidth; 
+                
+                let colIndex = 0; let rowMaxH = 0;
+
+                sortedBoxes.forEach((box) => {
+                    let dw = box.displayW; let dh = box.displayH;
+                    if (dw > maxImageWidth) { dh = dh * (maxImageWidth / dw); dw = maxImageWidth; }
+
+                    let infoText = box.qData.sourceObj.text.trim();
+                    let hasInfo = infoText !== "" && infoText !== "(Tap to add info)";
+                    let extraY = hasInfo ? 5 : 0; 
+
+                    if (currentY + dh + extraY > pageH - margin) {
+                        pdf.addPage();
+                        currentY = margin; colIndex = 0; rowMaxH = 0;
+                    }
+
+                    let currentX = margin + (colIndex * (colWidth + columnGap));
+
+                    if (hasInfo) {
+                        pdf.setFontSize(10);
+                        pdf.setFont('helvetica', 'italic');
+                        pdf.text(infoText, currentX + numberColWidth, currentY + 3);
+                    }
+
+                    pdf.setFontSize(12); pdf.setFont('helvetica', 'bold');
+                    
+                    pdf.text("Q" + box.qData.number + ".", currentX, currentY + extraY + 4);
+                    pdf.addImage(box.croppedImage, 'JPEG', currentX + numberColWidth, currentY + extraY, dw, dh);
+                    
+                    rowMaxH = Math.max(rowMaxH, dh + extraY + 8); 
+                    
+                    if (colsCount === 2) {
+                        if (colIndex === 0) { colIndex = 1; } 
+                        else { colIndex = 0; currentY += rowMaxH; rowMaxH = 0; }
+                    } else {
+                        currentY += rowMaxH; rowMaxH = 0;
+                    }
+                });
+
+                pdf.save('A4_Extracted_Questions.pdf');
+
+            } catch (err) {
+                alert("An error occurred during generation.");
+                console.error(err);
+            } finally {
+                document.getElementById('loader').style.display = 'none';
+                isAddingBoxMode = false; isDragging = false; 
+                fabricCanvas.defaultCursor = 'default';
+                document.getElementById('add-box-btn').classList.remove('active');
+                document.getElementById('add-box-btn').innerText = "+ Add Box";
+            }
+        }, 100);
+    }
+
+    // --- PWA OFFLINE SERVICE WORKER REGISTRATION ---
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('Offline Support Ready!', reg.scope))
+                .catch(err => console.error('Offline Support Failed: ', err));
+        });
+    }
+</script>
+</body>
+</html>
